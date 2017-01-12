@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CSV to JSON Converter</title>
+    <style>
+        #drop {
+            border:5px solid #000;
+            margin-bottom:20px;
+            padding:10px;
+        }
+    </style>
+    <script type="text/javascript">
+        var _gaq = _gaq || [];
+        _gaq.push(['_setAccount', 'UA-941940-28']);
+        _gaq.push(['_trackPageview']);
+
+        (function() {
+            var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+            ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+            var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+        })();
+    </script>
+</head>
+<body>
+<h1>Drag and Drop Model CSV to JSON Conversion</h1>
+<p>Drop any a CSV MATLAB Model CSV and this will convert it and return a JSON file.</p>
+<div id="drop">
+    DROP!<button onclick="document.querySelector('input').click()">Or Select</button>
+    <input style="visibility: collapse; width: 0px;" type="file" onchange="upload(this.files[0])">
+</div>
+
+<div id="output"></div>
+
+<script type="text/javascript">
+
+    var output = document.getElementById("output");
+
+
+    //var csv is the CSV file with headers
+    function csvJSON(csv){
+
+        var lines=csv.split("\n");
+
+        var numOfK = lines[lines.length - 2].split(",").filter(function(value) { return value !== "" }).length;
+
+        var result = [];
+
+        var obj = {};
+
+        //Mu
+        var mu = [];
+        for(var i=0;i<numOfK;i++) {
+            mu.push(lines[i].split(","));
+        }
+        obj["mu"] = mu;
+        result.push(obj);
+
+        //invSigmas
+        obj = {};
+        var sigmas = [];
+        for(var j=0;j<numOfK;j++){
+            var sigma = [];
+            for(var k=0;k<39;k++){
+                sigma.push(lines[((j*39)+(numOfK+k))].split(","));
+            }
+            sigmas.push(sigma);
+        }
+        obj["InversedSigmas"] = sigmas;
+        result.push(obj);
+
+        obj = {};
+        obj["DetSigma"] = lines[lines.length - 3].split(",").filter(function(value) { return value !== "" });
+        result.push(obj);
+        obj = {};
+        obj["CompProp"] = lines[lines.length - 2].split(",").filter(function(value) { return value !== "" });
+        result.push(obj);
+
+        //return result; //JavaScript object
+        return JSON.stringify(result); //JSON
+    }
+
+    /* Drag drop stuff */
+    window.ondragover = function(e) {e.preventDefault()}
+    window.ondrop = function(e) {
+        e.preventDefault();
+        console.log("Reading...");
+        var length = e.dataTransfer.items.length;
+        if(length > 1){
+            console.log("Please only drop 1 file.");
+        } else {
+            upload(e.dataTransfer.files[0]);
+        }
+    }
+
+    /* main upload function */
+    function upload(file) {
+        if( file.type.match(/text\/csv/) || file.type.match(/vnd\.ms-excel/) ){
+            //if(file.type.match(/text\/csv/)){
+            oFReader = new FileReader();
+            oFReader.onloadend = function() {
+
+                //console.log(csvJSON(this.result));
+
+                var json = csvJSON(this.result);
+
+                var blob = new Blob([json], {type: 'application/json'});
+                var url = URL.createObjectURL(blob);
+                output.innerHTML = '<a href="'+url+'">JSON file</a>';
+
+
+
+            };
+            oFReader.readAsText(file);
+        } else {
+            console.log("This file does not seem to be a CSV.");
+        }
+    }
+</script>
+</body>
+</html>

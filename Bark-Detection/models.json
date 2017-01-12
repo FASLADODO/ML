@@ -1,0 +1,8 @@
+{
+  "models": [
+    "bell",
+    "dog",
+    "door",
+    "walk"
+  ]
+}

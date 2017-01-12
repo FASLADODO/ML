@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sound Detection</title>
+    <meta charset= utf-8 />
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+    <script src="https://unpkg.com/meyda@3.1.1/dist/web/meyda.min.js"></script>
+    <script src= "https://cdnjs.cloudflare.com/ajax/libs/mathjs/3.7.0/math.min.js"></script>
+
+    <style type="text/css">
+
+        .button {
+            box-shadow: 3px 4px 0px 0px #8a2a21;
+            background:linear-gradient(to bottom, #c62d1f 5%, #f24437 100%);
+            background-color:#c62d1f;
+            border-radius:18px;
+            border:1px solid #d02718;
+            display:inline-block;
+            cursor:pointer;
+            color:skyblue;
+            font-family:Arial;
+            font-size:17px;
+            padding:7px 25px;
+            text-shadow:0px 1px 0px #810e05;
+        }
+        .button:hover {
+            background:linear-gradient(to bottom, #f24437 5%, #c62d1f 100%);
+            background-color:#f24437;
+        }
+
+    </style>
+</head>
+<body>
+<div>
+
+    <table>
+        <tr>
+            <td>
+                <p style="color:#c62d1f">FREQUENCY</p>
+                <canvas id="analyser" width="1024" height="256"> Freq</canvas>
+            </td>
+            <td align="center">
+                <button class="button" id="play">Play</button><br><br>
+                <button class="button" id="stop">Stop</button><br><br>
+                <button class="button" id="toggle">Toggle</button>
+            </td>
+        </tr>
+
+        <tr>
+            <td>
+                <p style="color:#c62d1f">TIME</p>
+                <canvas id="timer" width="1024" height="256"> Time</canvas>
+            </td>
+            <td style="padding:20px" align="center">
+                <p style="color:skyblue;font-size:24px">Decision</p>
+                <font color="#c62d1f" id="decision" size="48">Unknown</font>
+            </td>
+            
+        </tr>
+
+        <tr>
+            <td>
+                <p style="color:#c62d1f">EVENT</p>
+                <canvas id="event" width="1024" height="50"> Event Class</canvas>
+            </td>
+             <td style="padding:20px" align="center">
+                <p style="color:skyblue;font-size:24px">Probability</p>
+                <font  color="#c62d1f" id="probability" size="48"> 0.00%</font>
+            </td>
+        </tr>
+    </table>
+
+</div>
+
+<script type="text/javascript">
+
+
+    //constants
+    var FFT_SIZE = 2048; // twice size of data points which will be 1024
+    var MAX_BUFFER_SIZE = 100;
+    var MIN_BUFFER_SIZE = 10;
+    var MIN_PROBABILITY = 40;
+    var MIN_AVG_ENERGY = 400;
+
+
+    //canvas vars: for user interface
+    var analyserContext = null; //for freq
+    var canvasWidth, canvasHeight;
+    var recIndex = 0;
+    var bars =null;
+
+    var ctx= null; //for time
+    var column = 0;
+    var canvasWidth2 , canvasHeight2;
+
+    var eventCtx= null; //for event
+    var canvasWidth3 , canvasHeight3;
+    var BACKGROUND_COLOR = "skyblue";
+
+    //webaudiio vars
+    var context = null;
+    var analyser,audioInput,gainNode,microphone;
+    var audioConstraints = {
+        "audio": {
+            "mandatory": {
+                "googEchoCancellation": "false",
+                "googAutoGainControl": "false",
+                "googNoiseSuppression": "false",
+                "googHighpassFilter": "false"
+            },
+            "optional": []
+        }
+    };
+
+    //Buffer vars: This are variables that is used to store the sound buffer data over time
+    var frequencyData; 
+    var timeData;
+    var pData2, pData, cData, nData, nData2; // stores data for  iteration
+    var pFeatures2, pFeatures, cFeatures, nFeatures, nFeatures2; //stores feature vectors for current iteration
+    var pDelta2, pDelta, cDelta, nDelta, nDelta2;
+
+
+    var iteration;
+    var reading = false;
+    var data = [];
+    var index = 0;
+
+
+    //mfcc vars
+    var options = null;
+    var meyda = null;
+    var startIndex =2;
+    var endIndex =15;
+
+
+    //gmm vars
+    var table;
+    var models;
+    var modelNames;
+    var mu, inverseSigma, DetSigma, CompProp;
+
+    //classification vars
+    var decision = "";
+    var probability = 0;
+
+    window.addEventListener('load', init);
+
+    //This function initializes our web audio variables to any web browser, creates the context and 
+    //calls on loadGMM function to load in a gaussian mixture model 
+    function init () {
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+        window.navigator = window.navigator || {};
+        navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+        if (!navigator.cancelAnimationFrame)
+            navigator.cancelAnimationFrame = navigator.webkitCancelAnimationFrame || navigator.mozCancelAnimationFrame;
+        if (!navigator.requestAnimationFrame)
+            navigator.requestAnimationFrame = navigator.webkitRequestAnimationFrame || navigator.mozRequestAnimationFrame;
+        document.getElementById('play').addEventListener('click', start);
+        document.getElementById('stop').addEventListener('click', stop);
+        document.getElementById('toggle').addEventListener('click', toggle);
+
+        context = new AudioContext();
+        analyser = context.createAnalyser();
+
+        loadGMM();
+    }
+
+    //This loads the models listed in models.json file as the models used in the classigication scheme
+    //each model in the json will have another json file that specifies it's model
+    //Reat time analysis is started once the models are done loading
+    function loadGMM()
+    {
+
+        $.getJSON("models.json", function(json) {
+            parseGMMModels(json);
+            startRealTime();
+        });
+    }
+
+    //This function parses all the models into the respective structure. mu's, sigmas  are loaded into a list for easy access during analysis
+    function parseGMMModels(json)
+    {
+        modelNames = json['models'];
+        models = [];
+        for(var a = 0; a<modelNames.length; a++) {
+            $.getJSON(modelNames[a] + ".json", function(json) {
+                mu = json[0]['mu'];
+                inverseSigma = json[1]['InversedSigmas'];
+                DetSigma = json[2]['DetSigma'];
+                CompProp = json[3]['CompProp'];
+
+                for (var i = 0; i < mu.length; i++) {
+                    for (var j = 0; j < mu[i].length; j++) {
+                        mu[i][j] = parseFloat(mu[i][j]);
+                    }
+                }
+
+                for (var i = 0; i < inverseSigma.length; i++) {
+                    for (var j = 0; j < inverseSigma[0].length; j++) {
+                        for (var k = 0; k < inverseSigma[0][0].length; k++)
+                            inverseSigma[i][j][k] = parseFloat(inverseSigma[i][j][k]);
+                    }
+                }
+
+                for (var i = 0; i < DetSigma.length; i++) {
+                    DetSigma[i] = parseFloat(DetSigma[i]);
+                }
+                for (var i = 0; i < DetSigma.length; i++) {
+                    CompProp[i] = parseFloat(CompProp[i]);
+                }
+                model = [mu, inverseSigma, DetSigma, CompProp];
+                models.push(model);
+            });
+        }
+    }
+
+    //This function starts realtime analysis, and starts to analyze the data collected
+    function startRealTime()
+    {
+        console.log("STARTING REAL TIME ANALYSIS");
+        navigator.getUserMedia(audioConstraints,analyze, function(e) {
+            alert('Error getting audio');
+            console.log(e);
+        });
+    }
+
+    //Function to analyze the stream of sound into data points
+    //Calls on update  for every frame so sample the data points
+    function analyze(stream)
+    {
+        //could create gain here etc
+        gainNode = context.createGain();
+        microphone = context.createMediaStreamSource(stream);
+        audioInput = microphone;
+
+        var options =   {
+            "audioContext":context,
+            "source": microphone  ,
+            "melBands": 26,
+            "bufferSize": 1024,
+            "windowingFunction": "hamming",
+            "featureExtractors": ["mfcc"]
+        };
+        Meyda.createMeydaAnalyzer(options);
+
+        analyser = context.createAnalyser();
+        analyser.fftSize = FFT_SIZE;
+        audioInput.connect(analyser);
+        gainNode.gain.value = 0.0; //volume
+        audioInput.connect(gainNode);
+        gainNode.connect(context.destination);
+
+        var buffferLength = analyser.frequencyBinCount;
+
+        frequencyData = new Uint8Array(buffferLength);
+        timeData  = new Uint8Array(buffferLength);
+
+        initializeBuffers();
+        iteration = 0;
+        update();
+    }
+
+    //samples the data points, collects mfcc features and detects when a sound event has stopped/ started
+    //a sound event starts when the energy of the frame passes a threshold and stop when it get below that threshold
+    //feature vector for frame is derived as  mfcc coefficients, their  delta's and  how the deltas change over time,
+    //in total we use 39 feature vectors, mfcc coefficients 1-13, their deltas and the delta delta
+    //reference http://practicalcryptography.com/miscellaneous/machine-learning/guide-mel-frequency-cepstral-coefficients-mfccs/
+    // Data collected is then classified as a sound event
+    function update()
+    {
+
+        analyser.getByteFrequencyData(frequencyData);
+        analyser.getByteTimeDomainData(timeData);
+        drawFrequencyDomain(frequencyData);
+        drawTimeDomain(timeData);
+
+        pData2 = pData;
+        pData = cData;
+        cData = nData;
+        nData = nData2;
+        nData2 = frequencyData; //save current
+
+        var avg = avgEnergy(nData2);
+        if(avg>MIN_AVG_ENERGY)
+        {
+            drawEvent();
+
+            pFeatures2 = pFeatures;
+            pFeatures = cFeatures;
+            cFeatures = nFeatures;
+            nFeatures = nFeatures2;
+            nFeatures2 = Meyda.extract("mfcc", nData2).slice(startIndex, endIndex); //save current
+            var energy = getEnergy(nData2);
+            nFeatures2 [0] = energy;
+            pDelta2 = pDelta;
+            pDelta = cDelta;
+            cDelta = nDelta;
+            nDelta = nDelta2;
+
+            nDelta2 = delta(); //save current
+            var cDeltaDelta = ddelta();
+
+            var features = []
+            Array.prototype.push.apply(features, cFeatures);
+            Array.prototype.push.apply(features, cDelta);
+            Array.prototype.push.apply(features, cDeltaDelta);
+
+            console.log("Sound Event Detected");
+            reading = true; //start reading or continue
+            if(index+1 == MAX_BUFFER_SIZE)
+            {
+                //peform analsis on data, enpty data buffer and make index 0
+                classify(data);
+                data = [];
+                index =0;
+            }
+            if(features.indexOf(0) == -1 && features.indexOf(NaN) == -1) data[index++] = features;
+        }
+        else
+        {
+            if(reading) //stop pushing
+            {
+                reading = false;
+                if(index >= MIN_BUFFER_SIZE-1) classify(data);
+                else{
+                    document.getElementById('decision').innerHTML = "Unknown";
+                    document.getElementById('probability').innerHTML = "0.00" + "%";
+                }
+                data = [];
+                index =0;
+
+            }
+        }
+        iteration++;
+        requestId = requestAnimationFrame(update);
+    }
+
+    //This function classifies a sound event. It first normalizes the data, and then calculates the probability for each 
+    //frame in the sound event to be a particular model. The model with the highest probability sum over the entire frames is
+    //considered as our decision of classification. Probability is determined buy the total number of frames the model had the highest probability divided by the total number of frames
+    function classify(data)
+    {
+        if(data == null || data.length ==0) return;
+        var ndata = normalize(data);
+        //console.log(ndata);
+        var probs = []; //probability array
+        var counts = [];
+        for(var i = 0; i<models.length; i++) {
+            counts.push(0);
+        }
+        for(var n=0; n<ndata.length; n++) //frames for each model
+        {
+            var frameProbs = [];
+            for(var i = 0; i<models.length; i++){
+                var f =0;
+                var mu = models[i][0];
+                var inverseSigma = models[i][1];
+                var DetSigma = models[i][2];
+                var CompProp = models[i][3];
+                for(var k=0; k< CompProp.length; k++) //k
+                {
+                    var PROP = CompProp[k];
+                    var X = ndata[n];
+                    var MU = mu[k];
+                    var invSig =  inverseSigma[k];
+                    var detSig = DetSigma[k];
+                    f  += PROP * pdf(X, MU, invSig, detSig);
+                }
+                //console.log(f);
+                f = Math.log10(f);
+                frameProbs.push(f);
+            }
+            probs.push(frameProbs);
+        }
+
+        //Decision Map
+        for(var i=0; i<probs.length; i++){
+            var index = indexOfMax(probs[i]);
+            counts[index] = counts[index] + 1;
+        }
+
+        decision = modelNames[indexOfMax(counts)];
+        probability = parseFloat(counts[indexOfMax(counts)]/sum(counts) * 100).toFixed(2);
+        console.log(decision);
+        console.log(probability);
+        if(probability>MIN_PROBABILITY){
+            document.getElementById('decision').innerHTML = decision;
+            document.getElementById('probability').innerHTML = probability + "%";
+        }
+        else
+        {
+            document.getElementById('decision').innerHTML = "Unknown";
+            document.getElementById('probability').innerHTML = "0.00" + "%";
+        }
+        clearBuffers();
+    }
+
+    //normalizes each feature vector for the data by subtracting each feature from the mean and dividing buy the variance for each feature vector.
+    function normalize(data)
+    {
+        var cols = transpose(data);
+        var MU = [];
+        var SIG = [];
+        for(var j =0; j<cols.length; j++)
+        {
+            MU[j] = mean(cols[j]);
+            SIG[j] = sig(cols[j]);
+        }
+
+        for(var j =0; j<cols.length; j++)
+        {
+            for(var i =0; i<cols[j].length; i++)
+            {
+                cols[j][i] = (cols[j][i] - MU[j])/ SIG[j];
+            }
+        }
+
+        return transpose(cols);
+    }
+
+    //clear the buffer for the features and their deltas
+    function clearBuffers()
+    {
+        for(var i =0; i<cFeatures.length; i++)
+        {
+            pFeatures2[i] = 0;
+            pFeatures[i] = 0;
+            cFeatures[i] = 0;
+            nFeatures[i] = 0;
+            nFeatures2[i] = 0;
+
+        }
+
+        for(var i =0; i<cDelta.length; i++)
+        {
+            pDelta2[i] = 0;
+            pDelta[i] =0;
+            cDelta[i] =0;
+            nDelta[i] =0;
+            nDelta2[i] =0;
+
+        }
+    }
+
+    //intializes data buffer and clears the buffer for the features and their deltas
+    function initializeBuffers()
+    {
+        pData2 = pData = cData = nData = nData2 = frequencyData;
+        pFeatures2 = pFeatures = cFeatures = nFeatures = nFeatures2 = Meyda.extract("mfcc", frequencyData).slice(startIndex, endIndex);
+        pDelta2 = pDelta = cDelta = nDelta = nDelta2 = cFeatures;
+        for(var i=0; i<frequencyData.length; i++)
+        {
+            frequencyData[i]=0;
+            pData2[i] = 0;
+            pData[i] = 0;
+            cData[i] = 0;
+            nData[i] = 0;
+            nData2[i] = 0;
+
+        }
+        clearBuffers();
+
+    }
+
+    //calculates the delta for a particular frame using previously stored data in buffer 
+    function delta()
+    {
+        var N =2;//
+        var delta = [];
+        var denominator =0;
+
+        for(var n =1; n<= N; n++)
+        {
+            denominator += n * n;
+        }
+        denominator = 2 * denominator;
+
+        for( var t = 0; t < cFeatures.length; t++ ){
+
+            var numerator = 0;
+            numerator += 2 *(pFeatures2[t] - nFeatures2[t]);
+            numerator += 1 *(pFeatures[t] - nFeatures[t]);
+
+            delta[t] = numerator/denominator;
+        }
+
+        return delta;
+    }
+
+    //calculates the delta of the delta for a particular fram using previously stored deltas in buffer
+    function ddelta()
+    {
+        var N =2;//
+        var ddelta = [];
+        var denominator =0;
+
+        for(var n =1; n<= N; n++)
+        {
+            denominator += n * n;
+        }
+        denominator = 2 * denominator;
+
+        for( var t = 0; t < cDelta.length; t++ ){
+
+            var numerator = 0;
+            numerator += 2 * (pDelta2[t] - nDelta2[t]);
+            numerator += 1 * (pDelta[t] - nDelta[t]);
+
+            ddelta[t] = numerator/denominator;
+        }
+
+        return ddelta;
+    }
+
+    function transpose(array){
+        return math.transpose(array);
+    }
+
+    function add(array1, array2){
+        return math.add(array1, array2)
+    }
+
+    function subtract(array1, array2){
+        return math.subtract(array1, array2);
+    }
+
+    function multiply(array1, array2) {
+        return math.multiply(array1, array2);
+    }
+
+    // Gaussian probability density function
+    function pdf(x, mu, sigI, detSig)
+    {
+        var PI = Math.PI;
+        var XminusMu = subtract(x, mu);
+        var XminusMuT = transpose(XminusMu);
+        var e_index = -1/2 * multiply(multiply(XminusMu, sigI), XminusMuT);
+        var f = Math.pow(2*PI, -39/2) * Math.pow(detSig, -1/2) * Math.exp(e_index);
+
+        return f;
+    }
+    function sum(x)
+    {
+        var sum = 0;
+        for(var i = 0; i < x.length; i++)
+        {
+            sum = sum + x[i];
+        }
+        return sum;
+    }
+
+    function mean(x)
+    {
+        return sum(x) / x.length;
+    }
+
+    function variance(x) {
+        var mu = mean(x);
+        var temp =0;
+        for(var i = 0; i < x.length; i++)
+        {
+            temp += (x[i]-mu) *  (x[i]-mu);
+        }
+        return temp / x.length;
+    }
+
+    function sig(x)
+    {
+        return Math.sqrt(variance(x));
+    }
+
+    // Return the index containing the largest value
+    function indexOfMax(array) {
+        if (array.length === 0) {
+            return -1;
+        }
+
+        var max = array[0];
+        var maxIndex = 0;
+
+        for (var i = 1; i < array.length; i++) {
+            if (array[i] > max) {
+                maxIndex = i;
+                max = array[i];
+            }
+        }
+
+        return maxIndex;
+    }
+
+
+    function getEnergy(array)
+    {
+        var sum =0;
+        for( var i = 0; i < array.length; i++ ){
+            sum += (array[i] * array[i]);
+        }
+        return sum;
+    }
+
+
+    function avgEnergy(array)
+    {
+        return getEnergy(array)/array.length;
+    }
+
+    function start() {
+        if (!requestId) {
+            if(context.state === 'suspended') {
+                context.resume()
+            }
+            update();
+        }
+    }
+
+    function stop() {
+        if (requestId) {
+            window.cancelAnimationFrame(requestId);
+            requestId = undefined;
+        }
+    }
+    function toggle()
+    {
+        if(context.state === 'running') {
+            context.suspend()
+        } else if(context.state === 'suspended') {
+            context.resume()
+        }
+    }
+
+    function drawFrequencyDomain(frequencyData){
+
+        if (!analyserContext) {
+            var canvas = document.getElementById("analyser");
+            canvas.style.background = BACKGROUND_COLOR;
+            canvasWidth = canvas.width;
+            canvasHeight = canvas.height;
+            analyserContext = canvas.getContext('2d');
+        }
+        var SPACING = 4;
+        var BAR_WIDTH = 8;
+        var numBars = Math.round(canvasWidth / SPACING);
+
+        analyserContext.clearRect(0, 0, canvasWidth, canvasHeight);
+        analyserContext.fillStyle = '#F6D565';
+        analyserContext.lineCap = 'round';
+        var multiplier = analyser.frequencyBinCount / numBars;
+
+        // Draw rectangle for each frequency bin.- current mapping is 1 to 1
+        for (var i = 0; i < numBars; ++i) {
+            var magnitude = 0;
+            var offset = Math.floor( i * multiplier );
+            // gotta sum/average the block, or we miss narrow-bandwidth spikes
+            for (var j = 0; j< multiplier; j++)
+                magnitude += frequencyData[offset + j];
+            magnitude = magnitude / multiplier;
+            var magnitude2 = frequencyData[i * multiplier];
+            analyserContext.fillStyle = "hsl( " + Math.round((i*360)/numBars) + ", 100%, 50%)";
+            analyserContext.fillRect(i * SPACING, canvasHeight, BAR_WIDTH, -magnitude);
+        }
+    }
+
+    function drawEvent(type) {
+
+        if (!eventCtx) {
+            var canvas = document.getElementById("event");
+            canvas.style.background = BACKGROUND_COLOR;
+            canvasWidth3 = canvas.width;
+            canvasHeight3 = canvas.height;
+            eventCtx = canvas.getContext('2d');
+        }
+        var text = "I";
+
+        eventCtx.fillText(text,column,27.5);
+        eventCtx.fillStyle = '#c62d1f';
+    }
+    function drawTimeDomain(timeData) {
+
+        if (!ctx) {
+            var canvas = document.getElementById("timer");
+            canvas.style.background = BACKGROUND_COLOR;
+            canvasWidth2 = canvas.width;
+            canvasHeight2 = canvas.height;
+            ctx = canvas.getContext('2d');
+        }
+
+        var minValue = 9999999;
+        var maxValue = 0;
+        for (var i = 0; i < timeData.length; i++) {
+            var value = timeData[i] / canvasHeight2;
+            if(value > maxValue) {
+                maxValue = value;
+            } else if(value < minValue) {
+                minValue = value;
+            }
+        }
+        var y_lo = canvasHeight2 - (canvasHeight2 * minValue) - 1;
+        var y_hi = canvasHeight2 - (canvasHeight2 * maxValue) - 1;
+        ctx.fillStyle = '#000000'; //Give shadow effect
+        ctx.fillRect(column,y_lo, 1 + 0.5, y_hi - y_lo);
+        ctx.fillStyle = '#F6D565';
+        ctx.fillRect(column,y_lo, 1, y_hi - y_lo);
+
+        // loop around the canvas when we reach the end
+        column += 1;
+        if(column >= canvasWidth2) {
+            column = 0;
+            clearTimeCanvas();
+        }
+    }
+    function clearTimeCanvas() {
+
+        if(ctx)
+            ctx.clearRect(0, 0, canvasWidth2, canvasHeight2);
+        if(eventCtx)
+            eventCtx.clearRect(0,0, canvasWidth3, canvasHeight3);
+
+    }
+
+</script>
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "models": [
+    "walk_matlab2",
+    "dog_matlab2",
+    "door_matlab2",
+    "bell_matlab2"
+  ]
+}
