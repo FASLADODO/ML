@@ -158,4 +158,26 @@ price = [1, 1650, 3] * theta;
 
 fprintf(['Predicted price of a 1650 sq-ft, 3 br house ' ...
          '(using normal equations):\n $%f\n'], price);
+         
+         
+ % Note to find theta using inbuilt function insted of grad desc, 
+  % cold use fminuc with cost function that also calculates gradient like this
+  % function [jVal, gradient] = logisticCostFunction (theta)
+  %jVal = (theta(1) -5)^2 + (theta(2) -5) ^2;
+  %gradient = zeros(2,1);
+  %gradient(1) = 2*(theta(1)-5);
+  %gradient(2) = 2*(theta(2)-5);
+  %endfunction
+
+ %options = optimset('GradObj', 'on', 'MaxIter', '100');
+ %initialTheta = zeros(2,1)
+ %initialTheta =
+   % 0
+    %0
+ %[optTheta, functionVal, exitFlag] = fminunc(@logisticCostFunction, initialTheta , options)
+ %optTheta =
+   % 5.0000
+    %5.0000
+ %functionVal =    7.8886e-31
+ %exitFlag =  1
 
