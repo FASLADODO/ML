@@ -19,7 +19,15 @@ grad = zeros(size(theta));
 
 
 
+predictions = sigmoid( X*theta);
 
+thetaPrime = [ [ 0 ]; theta([2:length(theta)])]; %making the index 1, 0 since it is not regularized
+
+
+J = ((-1/m) .* ((log(predictions)'* y) + (log(1-predictions)'* (1-y)))) + (lambda / (2 * m)) * sum(thetaPrime .^ 2);
+
+
+grad = ((1/m) .* (X'*(predictions-y))) + (lambda/m * thetaPrime);
 
 
 % =============================================================
