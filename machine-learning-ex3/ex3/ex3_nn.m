@@ -79,6 +79,7 @@ for i = 1:m
     displayData(X(rp(i), :));
 
     pred = predict(Theta1, Theta2, X(rp(i),:));
+    
     fprintf('\nNeural Network Prediction: %d (digit %d)\n', pred, mod(pred, 10));
     
     % Pause

@@ -65,17 +65,50 @@ Theta2_grad = zeros(size(Theta2));
 
 
 
+%Part 1:
+
+%feedforward
+a1 = [ones(m,1), X]; %add ones as bias unit
+z2 = a1 * Theta1';
+a2 = sigmoid(z2);
+n = size(a2);
+a2 = [ones(n,1) a2]; %add ones for bias unit
+z3 = a2 * Theta2';
+a3 = sigmoid(z3); %this is now the prediction
+
+%Recode y
+y_recode = zeros(m, num_labels);
+I = eye(num_labels);
+for i =1:m
+ y_recode(i, :) = I(y(i), :);
+endfor
+
+%Regularize cost for only 3 layers as in this example i.e only 2 theta's
+J_reg = lambda / (2 * m) * (sum(sum(Theta1(:, 2:end) .^2)) + sum(sum(Theta2(:, 2:end) .^2)));
+%Cost
+J = 1 / m * sum(sum((-y_recode .* log(a3) - (1 - y_recode) .* log(1 - a3)))) + J_reg;
 
 
 
+%Part 2:
+%Backpropagation for 3 layers only
 
+%find sigmas
+sigma3 = a3.-y_recode;
+sigma2 = (sigma3*Theta2).*sigmoidGradient([ones(size(z2, 1), 1) z2]);  %Add bias of the hidden layer
+sigma2 = sigma2(:, 2:end); %Remove d0 of the hidden layer
 
+%find deltas
+delta2 = sigma3' * a2;
+delta1 = sigma2' * a1;
 
-
-
-
-
-
+%find gradients
+  % regularize the gradients, do not include the bias units
+  Theta1_grad_reg = (lambda/m) *[zeros(size(Theta1, 1), 1) Theta1(:, 2:end)];;
+  Theta2_grad_reg = (lambda/m) *[zeros(size(Theta2, 1), 1) Theta2(:, 2:end)];; 
+Theta1_grad = (delta1./m) + Theta1_grad_reg;
+Theta2_grad = (delta2./m) + Theta2_grad_reg;
+ 
 
 
 
