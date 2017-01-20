@@ -22,10 +22,10 @@ grad = zeros(size(theta));
 
 
 
-
-
-
-
+thetaPrime = [ [ 0 ]; theta([2:length(theta)])]; %making the index 1, 0 since it is not regularized
+J_reg = (lambda / (2 * m)) * sum(thetaPrime .^ 2);
+J = 1/(2*m) * ((X*theta - y)'*(X*theta - y)) + J_reg;
+grad = ((1/m) .* (X'*(X*theta-y))) + (lambda/m * thetaPrime);
 
 
 
